@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+haystack-ai
+ollama-haystack
+sentence-transformers
+transformers
+torch
+accelerate
+pydantic
+python-multipart

@@ -1,0 +1,73 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Virtual Environments
+# =========================
+env/
+venv/
+.venv/
+
+# =========================
+# Build / Packaging
+# =========================
+build/
+dist/
+*.egg-info/
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.*
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Data (optional - depends)
+# =========================
+# If your data is large or private → ignore
+data/*
+!data/*.txt   # keep small sample text files if needed
+
+# =========================
+# Model / AI caches (IMPORTANT)
+# =========================
+.cache/
+.huggingface/
+sentence_transformers/
+models/
+
+# Windows / Mac junk
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Docker
+# =========================
+*.env
+docker-compose.override.yml
+
+# =========================
+# Streamlit
+# =========================
+.streamlit/secrets.toml
