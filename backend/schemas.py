@@ -14,3 +14,4 @@ class ChatResponse(BaseModel):
     sources: list[SourceChunk]
     confidence: float
     response_time_seconds: float
+    cached: bool = False

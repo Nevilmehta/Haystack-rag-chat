@@ -27,4 +27,3 @@ make /chat/stream return the answer gradually instead of waiting for the full re
 When user asks the same question again:
 First time  → full RAG pipeline runs
 Second time → cached response returns instantly
-

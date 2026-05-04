@@ -25,6 +25,7 @@ from backend.config import (
     TOP_K_RERANK,
 )
 from backend.utils import load_text_documents, calculate_confidence
+from backend.cache import InMemoryCache
 
 from queue import Queue
 from threading import Thread
@@ -58,6 +59,7 @@ class RAGService:
     def __init__(self):
         self.document_store = InMemoryDocumentStore()
         self.pipeline = self._build_pipeline()
+        self.cache = InMemoryCache(ttl_seconds=3600)
 
     def _index_documents(self):
         documents = load_text_documents(DATA_DIR)
@@ -126,6 +128,13 @@ class RAGService:
         return pipeline
 
     def ask(self, question: str):
+        cached_result = self.cache.get(question)
+
+        if cached_result:
+            cached_result["cached"] = True
+            cached_result["response_time_seconds"] = 0.0
+            return cached_result
+
         start_time = time.time()
 
         result = self.pipeline.run(
@@ -163,19 +172,36 @@ class RAGService:
                 }
             )
 
-        return {
+        response = {
             "answer": answer,
             "sources": sources,
             "confidence": calculate_confidence(scores),
-            "response_time_seconds": round(time.time() - start_time, 2)
+            "response_time_seconds": round(time.time() - start_time, 2),
+            "cached": False
         }
 
+        self.cache.set(question, response)
+
+        return response
+
     def ask_stream(self, question:str):
+        cached_result = self.cache.get(question)
+        
+        if cached_result:
+            yield f"data: {json.dumps({'type': 'token', 'content': cached_result['answer']})}\n\n"
+            yield f"data: {json.dumps({'type': 'sources', 'content': cached_result['sources']})}\n\n"
+            yield f"data: {json.dumps({'type': 'confidence', 'content': cached_result['confidence']})}\n\n"
+            yield f"data: {json.dumps({'type': 'cache', 'content': True})}\n\n"
+            yield "data: [DONE]\n\n"
+            return 
+
         token_queue = Queue()
         sources_holder = {}
+        full_answer_parts = []
 
         def streaming_callback(chunk):
-            token = getattr(chunk, "content", "") 
+            token = getattr(chunk, "content", None) or str(chunk)
+            full_answer_parts.append(token) 
 
             if token:
                 token_queue.put(token)
@@ -238,7 +264,6 @@ class RAGService:
                         "prompt_builder": {"question": question}
                     },
                     include_outputs_from={"ranker"},
-
                 )
 
                 docs = result["ranker"]["documents"]
@@ -252,6 +277,23 @@ class RAGService:
                     }
                     for doc in docs
                 ]
+
+                confidence = calculate_confidence([doc.score for doc in docs])
+                answer = "".join(full_answer_parts)
+
+                sources_holder["sources"] = sources
+                sources_holder["confidence"] = confidence
+
+                self.cache.set(
+                    question,
+                    {
+                        "answer": answer,
+                        "sources": sources_holder,
+                        "confidence": confidence,
+                        "response_time_seconds": 0.0,
+                        "cached": False
+                    }
+                )
 
             except Exception as error:
                 token_queue.put(f"\n[ERROR] {str(error)}")
@@ -271,4 +313,6 @@ class RAGService:
             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
         yield f"data: {json.dumps({'type': 'sources', 'content': sources_holder.get('sources', [])})}\n\n"
+        yield f"data: {json.dumps({'type': 'confidence', 'content': sources_holder.get('confidence', 0.0)})}\n\n"
+        yield f"data: {json.dumps({'type': 'cache', 'content': False})}\n\n"
         yield "data: [Done]\n\n"
