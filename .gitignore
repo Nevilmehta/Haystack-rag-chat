@@ -71,3 +71,8 @@ docker-compose.override.yml
 # Streamlit
 # =========================
 .streamlit/secrets.toml
+
+
+.env
+__pycache__/
+*.pyc

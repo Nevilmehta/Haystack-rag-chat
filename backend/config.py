@@ -12,7 +12,12 @@ TOP_K_BM25 = 3
 TOP_K_EMBEDDING = 3
 TOP_K_RERANK = 2
 
-API_KEY = "REMOVED_SECRET"
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_KEY = os.getenv("API_KEY")
 MAX_QUESTION_LENGTH = 1000
 
 BLOCKED_PROMPT_PATTERNS = [
