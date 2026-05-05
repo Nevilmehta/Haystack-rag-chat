@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from backend.schemas import ChatRequest, ChatResponse   
 from backend.rag_pipeline import RAGService
 from fastapi.responses import StreamingResponse
+from backend.security import verify_api_key, validate_question
 
 app = FastAPI(
     title="AI Second Brain API",
@@ -19,10 +20,14 @@ def health_check():
     }
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, api_key: str = Depends(verify_api_key)):
     try:
+        validate_question(request.question)
         result = rag_service.ask(request.question)
         return result
+
+    except HTTPException:
+        raise
 
     except Exception as error:
         raise HTTPException(
@@ -31,12 +36,16 @@ def chat(request: ChatRequest):
         )
 
 @app.post("/chat/stream")
-def chat_stream(request: ChatRequest):
+def chat_stream(request: ChatRequest, api_key: str = Depends(verify_api_key)):
     try:
         return StreamingResponse(
             rag_service.ask_stream(request.question),
             media_type="text/event-stream"
         )
+
+    except HTTPException:
+        raise
+
     except Exception as error:
         raise HTTPException(
             status_code=500,
