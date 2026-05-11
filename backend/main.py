@@ -1,4 +1,5 @@
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
+from backend.config import DATA_DIR
 from backend.schemas import ChatRequest, ChatResponse   
 from backend.rag_pipeline import RAGService
 from fastapi.responses import StreamingResponse
@@ -51,3 +52,29 @@ def chat_stream(request: ChatRequest, api_key: str = Depends(verify_api_key)):
             status_code=500,
             detail=f"Failed to stream answer: {str(error)}"
         )
+
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...), api_key: str = Depends(verify_api_key)):
+    allowed_extensions = [".pdf", ".txt"]
+
+    file_extension = "." + file.filename.split(".")[-1].lower()
+
+    if file_extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF and TXT files are supported.",
+        )
+
+    DATA_DIR.mkdir(exist_ok=True)
+    file_path = DATA_DIR / file.filename
+    content = await file.read()
+
+    with open(file_path, "wb") as output_file:
+        output_file.write(content)
+
+    rag_service.reload_documents()
+
+    return {
+        "message": "File uploaded and indexed successfully.",
+        "filename": file.filename,
+    }    

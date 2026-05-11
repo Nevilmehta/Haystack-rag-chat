@@ -1,5 +1,6 @@
 from pathlib import Path
 from haystack import Document
+from pypdf import PdfReader
 
 def split_text(text: str, chunk_size: int = 350, overlap: int = 100):
     chunks = []
@@ -16,11 +17,29 @@ def split_text(text: str, chunk_size: int = 350, overlap: int = 100):
 
     return chunks
 
-def load_text_documents(data_dir: Path):
+def read_pdf(file_path: Path):
+    reader = PdfReader(str(file_path))
+    text = ""
+
+    for page in reader.pages:
+        page_text = page.extract_text() or ""
+        text += page_text + "\n"
+
+    return text
+
+def load_documents(data_dir: Path):
     documents = []
 
-    for file_path in data_dir.glob("*.txt"):
-        text = file_path.read_text(encoding="utf-8")
+    for file_path in data_dir.glob("*"):
+        if file_path.suffix.lower() == ".txt":
+            text = file_path.read_text(encoding="utf-8")
+
+        elif file_path.suffix.lower() == ".pdf":
+            text = read_pdf(file_path)
+
+        else:
+            continue
+
         chunks = split_text(text)
 
         for index, chunk in enumerate(chunks):
@@ -29,7 +48,8 @@ def load_text_documents(data_dir: Path):
                     content = chunk,
                     meta = {
                         "source": file_path.name,
-                        "chunk_id": index
+                        "chunk_id": index,
+                        "file_type": file_path.suffix.lower()
                     }
                 )
             )

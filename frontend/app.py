@@ -1,131 +1,197 @@
+import json
+import os
+
 import requests
 import streamlit as st
-
-import os
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
-API_URL = os.getenv("API_URL")
-API_KEY = os.getenv("API_KEY")
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+API_KEY = os.getenv("API_KEY", "")
+
 
 st.set_page_config(
-    page_title = "AI Second Brain",
+    page_title="AI Second Brain",
     page_icon="🧠",
     layout="wide",
 )
 
-st.title("🧠 AI Second Brain")
-st.caption("Explainable RAG assistant powered by FastAPI + Haystack + Ollama")
-
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-with st.sidebar:
-    st.header("Settings")
+if "last_sources" not in st.session_state:
+    st.session_state.last_sources = []
+
+if "last_confidence" not in st.session_state:
+    st.session_state.last_confidence = 0.0
+
+if "last_cached" not in st.session_state:
+    st.session_state.last_cached = False
+
+
+left_col, chat_col, source_col = st.columns([1, 2.2, 1.2])
+
+
+# LEFT PANEL
+with left_col:
+    st.title("🧠 AI Second Brain")
+    st.caption("Upload documents and chat with your personal knowledge base.")
 
     api_key = st.text_input(
         "API Key",
-        value=API_KEY or "",
+        value=API_KEY,
         type="password",
     )
 
     st.divider()
 
-    st.subheader("About")
-    st.write(
-        "This assistant answers using your local notes and shows the retrieved sources."
+    st.subheader("Upload Document")
+
+    uploaded_file = st.file_uploader(
+        "Upload PDF or TXT",
+        type=["pdf", "txt"],
     )
 
-left_col, right_col = st.columns([2,1])
+    if uploaded_file is not None:
+        if st.button("Upload & Index", use_container_width=True):
+            try:
+                with st.spinner("Uploading and indexing document..."):
+                    files = {
+                        "file": (
+                            uploaded_file.name,
+                            uploaded_file.getvalue(),
+                            uploaded_file.type,
+                        )
+                    }
 
-with left_col:
-    st.subheader("chat")
+                    response = requests.post(
+                        f"{API_URL}/upload",
+                        headers={"X-API-Key": api_key},
+                        files=files,
+                        timeout=300,
+                    )
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
+                if response.status_code == 200:
+                    st.success("Uploaded and indexed successfully.")
+                else:
+                    st.error(response.text)
 
-    question = st.chat_input("Ask your second Brain...")
+            except Exception as error:
+                st.error(f"Upload failed: {error}")
+
+    st.divider()
+
+    if st.button("Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.session_state.last_sources = []
+        st.session_state.last_confidence = 0.0
+        st.session_state.last_cached = False
+        st.rerun()
+
+
+# MIDDLE CHAT PANEL
+with chat_col:
+    st.header("Chat")
+
+    chat_box = st.container(height=520)
+
+    with chat_box:
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+
+    question = st.chat_input("Ask something from your uploaded documents...")
 
     if question:
         st.session_state.messages.append(
-            {
-                "role": "user",
-                "content": question
-            }
+            {"role": "user", "content": question}
         )
 
-        with st.chat_message("user"):
-            st.write(question)
+        with chat_box:
+            with st.chat_message("user"):
+                st.write(question)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+            with st.chat_message("assistant"):
+                answer_placeholder = st.empty()
+                full_answer = ""
+
                 try:
                     response = requests.post(
-                        f"{API_URL}/chat",
+                        f"{API_URL}/chat/stream",
                         headers={
                             "Content-Type": "application/json",
                             "X-API-Key": api_key,
                         },
-                        json={
-                            "question": question,
-                        },
-                        timeout=120,
+                        json={"question": question},
+                        stream=True,
+                        timeout=300,
                     )
 
                     if response.status_code != 200:
                         st.error(response.text)
                     else:
-                        data = response.json()
+                        for line in response.iter_lines():
+                            if not line:
+                                continue
 
-                        answer = data["answer"]
-                        st.write(answer)
+                            decoded_line = line.decode("utf-8")
+
+                            if not decoded_line.startswith("data: "):
+                                continue
+
+                            data_text = decoded_line.replace("data: ", "")
+
+                            if data_text == "[DONE]":
+                                break
+
+                            event = json.loads(data_text)
+                            event_type = event.get("type")
+                            content = event.get("content")
+
+                            if event_type == "token":
+                                full_answer += content
+                                answer_placeholder.markdown(full_answer)
+
+                            elif event_type == "sources":
+                                st.session_state.last_sources = content
+
+                            elif event_type == "confidence":
+                                st.session_state.last_confidence = content
+
+                            elif event_type == "cache":
+                                st.session_state.last_cached = content
 
                         st.session_state.messages.append(
-                            {
-                                "role": "assistant",
-                                "content": answer,
-                            }
+                            {"role": "assistant", "content": full_answer}
                         )
 
-                        st.session_state.last_sources = data.get("sources", [])
-                        st.session_state.last_confidence = data.get("confidence", 0.0)
-                        st.session_state.last_cached = data.get("cached", False)
-                        st.session_state.last_time = data.get(
-                            "response_time_seconds", 0.0
-                        )
+                        st.rerun()
 
                 except Exception as error:
                     st.error(f"Request failed: {error}")
 
-with right_col:
-    st.subheader("Why this answer?")
 
-    confidence = st.session_state.get("last_confidence", None)
-    cached = st.session_state.get("last_cached", None)
-    response_time = st.session_state.get("last_time", None)
-    sources = st.session_state.get("last_sources", [])
+# RIGHT PANEL
+with source_col:
+    st.header("Why this answer?")
 
-    if confidence is not None:
-        st.metric("confidence", confidence)
-
-    if cached is not None:
-        st.metric("cached", "Yes" if cached else "No")
-
-    if response_time is not None:
-        st.metric("Response Time", f"{response_time}s")
+    st.metric("Confidence", st.session_state.last_confidence)
+    st.metric("Cached", "Yes" if st.session_state.last_cached else "No")
 
     st.divider()
 
-    if sources:
-        st.write("Retrieved Sources")
+    sources = st.session_state.last_sources
 
+    if sources:
         for source in sources:
+            score = source.get("score")
+            score_text = round(score, 3) if score else "N/A"
+
             with st.expander(
-                f"{source['source']} | Chunk {source['chunk_id']} | Score {round(source['score'], 3) if source['score'] else 'N/A'}"
+                f"{source.get('source')} | Chunk {source.get('chunk_id')} | Score {score_text}"
             ):
-                st.write(source["content"])
-    
+                st.write(source.get("content"))
     else:
         st.info("Ask a question to see retrieved sources.")

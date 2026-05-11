@@ -24,7 +24,7 @@ from backend.config import (
     TOP_K_EMBEDDING,
     TOP_K_RERANK,
 )
-from backend.utils import load_text_documents, calculate_confidence
+from backend.utils import load_documents, calculate_confidence
 from backend.cache import InMemoryCache
 
 from queue import Queue
@@ -61,8 +61,13 @@ class RAGService:
         self.pipeline = self._build_pipeline()
         self.cache = InMemoryCache(ttl_seconds=3600)
 
+    def reload_documents(self):
+        self.document_store = InMemoryDocumentStore()
+        self.cache.clear()
+        self.pipeline = self._build_pipeline()
+
     def _index_documents(self):
-        documents = load_text_documents(DATA_DIR)
+        documents = load_documents(DATA_DIR)
 
         if not documents:
             return 
@@ -184,38 +189,44 @@ class RAGService:
 
         return response
 
-    def ask_stream(self, question:str):
+    def ask_stream(self, question: str) -> Generator[str, None, None]:
         cached_result = self.cache.get(question)
-        
+
         if cached_result:
             yield f"data: {json.dumps({'type': 'token', 'content': cached_result['answer']})}\n\n"
             yield f"data: {json.dumps({'type': 'sources', 'content': cached_result['sources']})}\n\n"
             yield f"data: {json.dumps({'type': 'confidence', 'content': cached_result['confidence']})}\n\n"
             yield f"data: {json.dumps({'type': 'cache', 'content': True})}\n\n"
             yield "data: [DONE]\n\n"
-            return 
+            return
 
         token_queue = Queue()
-        sources_holder = {}
+        sources_holder = {
+            "sources": [],
+            "confidence": 0.0,
+        }
         full_answer_parts = []
 
         def streaming_callback(chunk):
-            token = getattr(chunk, "content", None) or str(chunk)
-            full_answer_parts.append(token) 
+            token = getattr(chunk, "content", "")
 
-            if token:
-                token_queue.put(token)
+            # Ignore final metadata-only streaming chunks
+            if token is None or token == "":
+                return
+
+            full_answer_parts.append(token)
+            token_queue.put(token)
 
         def run_pipeline():
             try:
                 generator = OllamaGenerator(
-                    model = OLLAMA_MODEL,
-                    url = OLLAMA_URL,
-                    generation_kwargs = {
+                    model=OLLAMA_MODEL,
+                    url=OLLAMA_URL,
+                    generation_kwargs={
                         "temperature": 0.1,
-                        "top_p": 0.9
+                        "top_p": 0.9,
                     },
-                    streaming_callback = streaming_callback
+                    streaming_callback=streaming_callback,
                 )
 
                 pipeline = Pipeline()
@@ -223,20 +234,20 @@ class RAGService:
                 text_embedder = SentenceTransformersTextEmbedder(model=EMBEDDING_MODEL)
 
                 bm25_retriever = InMemoryBM25Retriever(
-                    document_store = self.document_store,
-                    top_k = TOP_K_BM25
+                    document_store=self.document_store,
+                    top_k=TOP_K_BM25,
                 )
 
                 embedding_retriever = InMemoryEmbeddingRetriever(
-                    document_store = self.document_store,
-                    top_k = TOP_K_EMBEDDING
+                    document_store=self.document_store,
+                    top_k=TOP_K_EMBEDDING,
                 )
 
                 joiner = DocumentJoiner()
 
                 ranker = SentenceTransformersSimilarityRanker(
-                    model = "cross-encoder/ms-marco-MiniLM-L-6-v2",
-                    top_k = TOP_K_RERANK
+                    model="cross-encoder/ms-marco-MiniLM-L-6-v2",
+                    top_k=TOP_K_RERANK,
                 )
 
                 prompt_builder = PromptBuilder(template=PROMPT_TEMPLATE)
@@ -261,19 +272,22 @@ class RAGService:
                         "text_embedder": {"text": question},
                         "bm25_retriever": {"query": question},
                         "ranker": {"query": question},
-                        "prompt_builder": {"question": question}
+                        "prompt_builder": {"question": question},
                     },
-                    include_outputs_from={"ranker"},
+                    include_outputs_from={"ranker"}
                 )
 
-                docs = result["ranker"]["documents"]
+                print("PIPELINE RESULT KEYS:", result.keys())
+                print("FULL RESULT:", result)
 
-                sources_holder["sources"] = [
+                docs = result.get("ranker", {}).get("documents", [])
+
+                sources = [
                     {
                         "source": doc.meta.get("source", "unknown"),
                         "chunk_id": doc.meta.get("chunk_id", -1),
                         "score": doc.score,
-                        "content": doc.content
+                        "content": doc.content,
                     }
                     for doc in docs
                 ]
@@ -288,15 +302,15 @@ class RAGService:
                     question,
                     {
                         "answer": answer,
-                        "sources": sources_holder,
+                        "sources": sources,
                         "confidence": confidence,
                         "response_time_seconds": 0.0,
-                        "cached": False
-                    }
+                        "cached": False,
+                    },
                 )
 
             except Exception as error:
-                token_queue.put(f"\n[ERROR] {str(error)}")
+                token_queue.put(f"[ERROR] {str(error)}")
 
             finally:
                 token_queue.put(None)
@@ -308,11 +322,11 @@ class RAGService:
             token = token_queue.get()
 
             if token is None:
-                break 
+                break
 
             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
-        yield f"data: {json.dumps({'type': 'sources', 'content': sources_holder.get('sources', [])})}\n\n"
-        yield f"data: {json.dumps({'type': 'confidence', 'content': sources_holder.get('confidence', 0.0)})}\n\n"
+        yield f"data: {json.dumps({'type': 'sources', 'content': sources_holder['sources']})}\n\n"
+        yield f"data: {json.dumps({'type': 'confidence', 'content': sources_holder['confidence']})}\n\n"
         yield f"data: {json.dumps({'type': 'cache', 'content': False})}\n\n"
-        yield "data: [Done]\n\n"
+        yield "data: [DONE]\n\n"
