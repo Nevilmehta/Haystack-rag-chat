@@ -1,4 +1,8 @@
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -6,16 +10,11 @@ DATA_DIR = BASE_DIR / "data"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 OLLAMA_MODEL = "llama3.2:1b"
-OLLAMA_URL = "http://localhost:11434"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
 TOP_K_BM25 = 3
 TOP_K_EMBEDDING = 3
 TOP_K_RERANK = 2
-
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 API_KEY = os.getenv("API_KEY")
 MAX_QUESTION_LENGTH = 1000

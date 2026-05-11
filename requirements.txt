@@ -8,3 +8,6 @@ torch
 accelerate
 pydantic
 python-multipart
+streamlit
+requests
+python-dotenv

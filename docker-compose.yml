@@ -1,0 +1,10 @@
+services:
+  backend:
+    build: .
+    container_name: ai-second-brain-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_URL=http://host.docker.internal:11434
+    volumes:
+      - ./data:/app/data
