@@ -39,12 +39,6 @@ with left_col:
     st.title("🧠 AI Second Brain")
     st.caption("Upload documents and chat with your personal knowledge base.")
 
-    api_key = st.text_input(
-        "API Key",
-        value=API_KEY,
-        type="password",
-    )
-
     st.divider()
 
     st.subheader("Upload Document")
@@ -68,7 +62,7 @@ with left_col:
 
                     response = requests.post(
                         f"{API_URL}/upload",
-                        headers={"X-API-Key": api_key},
+                        headers={"X-API-Key": API_KEY},
                         files=files,
                         timeout=300,
                     )
@@ -122,7 +116,7 @@ with chat_col:
                         f"{API_URL}/chat/stream",
                         headers={
                             "Content-Type": "application/json",
-                            "X-API-Key": api_key,
+                            "X-API-Key": API_KEY,
                         },
                         json={"question": question},
                         stream=True,
