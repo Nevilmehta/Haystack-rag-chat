@@ -38,9 +38,15 @@ You are an AI Second Brain assistant.
 STRICT RULES:
 1. Use ONLY the provided context.
 2. Do not invent facts.
-3. If the answer is not in the context, say:
+3. Use conversation history only to understand follow-up references like "he", "she", "it", "that project", or "those skills".
+4. If the answer is not in the context, say:
 "I don't know based on the provided notes."
-4. Keep the answer clear and useful.
+5. Keep the answer clear and useful.
+
+CONVERSATION HISTORY:
+{% for message in history %}
+{{ message.role }}: {{ message.content }}
+{% endfor %}
 
 CONTEXT:
 {% for doc in documents %}
@@ -132,8 +138,10 @@ class RAGService:
 
         return pipeline
 
-    def ask(self, question: str):
+    def ask(self, question: str, history: list[dict] | None=None):
         cached_result = self.cache.get(question)
+
+        history = history or []
 
         if cached_result:
             cached_result["cached"] = True
@@ -154,7 +162,8 @@ class RAGService:
                     "query": question
                 },
                 "prompt_builder": {
-                    "question": question
+                    "question": question,
+                    "history": history
                 }
             },
             include_outputs_from={"ranker", "generator"}
@@ -189,8 +198,10 @@ class RAGService:
 
         return response
 
-    def ask_stream(self, question: str) -> Generator[str, None, None]:
+    def ask_stream(self, question: str, history: list[dict] | None = None) -> Generator[str, None, None]:
         cached_result = self.cache.get(question)
+
+        history = history or []
 
         if cached_result:
             yield f"data: {json.dumps({'type': 'token', 'content': cached_result['answer']})}\n\n"
@@ -272,7 +283,7 @@ class RAGService:
                         "text_embedder": {"text": question},
                         "bm25_retriever": {"query": question},
                         "ranker": {"query": question},
-                        "prompt_builder": {"question": question},
+                        "prompt_builder": {"question": question, "history": history},
                     },
                     include_outputs_from={"ranker"}
                 )

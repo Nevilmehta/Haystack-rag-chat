@@ -27,3 +27,21 @@ make /chat/stream return the answer gradually instead of waiting for the full re
 When user asks the same question again:
 First time  → full RAG pipeline runs
 Second time → cached response returns instantly
+
+backend and streamlit is working ,
+and chat with streaming also working with responses
+Adding conversational memory, because then your app feels:
+ChatGPT for documents
+instead of:
+single-question RAG demo
+
+🧠 Conversational Memory RAG
+with:
+previous messages
+context-aware retrieval
+follow-up question handling
+
+Q1: Who is Nevil Mehta?
+Q2: What frameworks does he use?
+
+The second question should understand “he” from the previous chat.
