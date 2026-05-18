@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 
 import requests
 import streamlit as st
@@ -18,8 +19,15 @@ st.set_page_config(
     layout="wide",
 )
 
+
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = []
 
 if "last_sources" not in st.session_state:
     st.session_state.last_sources = []
@@ -37,52 +45,82 @@ left_col, chat_col, source_col = st.columns([1, 2.2, 1.2])
 # LEFT PANEL
 with left_col:
     st.title("🧠 AI Second Brain")
-    st.caption("Upload documents and chat with your personal knowledge base.")
+    st.caption("Upload documents and chat with your current session only.")
 
     st.divider()
 
-    st.subheader("Upload Document")
+    st.subheader("Current Session")
+    st.caption(st.session_state.session_id)
 
-    uploaded_file = st.file_uploader(
+    if st.button("New Chat", use_container_width=True):
+        st.session_state.session_id = str(uuid.uuid4())
+        st.session_state.messages = []
+        st.session_state.uploaded_files = []
+        st.session_state.last_sources = []
+        st.session_state.last_confidence = 0.0
+        st.session_state.last_cached = False
+        st.rerun()
+
+    st.divider()
+
+    st.subheader("Upload Documents")
+
+    uploaded_files = st.file_uploader(
         "Upload PDF or TXT",
         type=["pdf", "txt"],
+        accept_multiple_files=True,
     )
 
-    if uploaded_file is not None:
+    if uploaded_files:
         if st.button("Upload & Index", use_container_width=True):
+            success_count = 0
+
             try:
-                with st.spinner("Uploading and indexing document..."):
-                    files = {
-                        "file": (
-                            uploaded_file.name,
-                            uploaded_file.getvalue(),
-                            uploaded_file.type,
+                with st.spinner("Uploading and indexing documents..."):
+                    for uploaded_file in uploaded_files:
+                        files = {
+                            "file": (
+                                uploaded_file.name,
+                                uploaded_file.getvalue(),
+                                uploaded_file.type,
+                            )
+                        }
+
+                        response = requests.post(
+                            f"{API_URL}/upload",
+                            params={
+                                "session_id": st.session_state.session_id,
+                            },
+                            headers={
+                                "X-API-Key": API_KEY,
+                            },
+                            files=files,
+                            timeout=300,
                         )
-                    }
 
-                    response = requests.post(
-                        f"{API_URL}/upload",
-                        headers={"X-API-Key": API_KEY},
-                        files=files,
-                        timeout=300,
-                    )
+                        if response.status_code == 200:
+                            success_count += 1
 
-                if response.status_code == 200:
-                    st.success("Uploaded and indexed successfully.")
-                else:
-                    st.error(response.text)
+                            if uploaded_file.name not in st.session_state.uploaded_files:
+                                st.session_state.uploaded_files.append(uploaded_file.name)
+                        else:
+                            st.error(f"{uploaded_file.name}: {response.text}")
+
+                if success_count > 0:
+                    st.success(f"Uploaded and indexed {success_count} file(s).")
 
             except Exception as error:
                 st.error(f"Upload failed: {error}")
 
     st.divider()
 
-    if st.button("Clear Chat", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.last_sources = []
-        st.session_state.last_confidence = 0.0
-        st.session_state.last_cached = False
-        st.rerun()
+    st.subheader("Session Files")
+
+    if st.session_state.uploaded_files:
+        for file_name in st.session_state.uploaded_files:
+            st.write(f"📄 {file_name}")
+    else:
+        st.info("No files uploaded in this chat yet.")
 
 
 # MIDDLE CHAT PANEL
@@ -96,11 +134,14 @@ with chat_col:
             with st.chat_message(message["role"]):
                 st.write(message["content"])
 
-    question = st.chat_input("Ask something from your uploaded documents...")
+    question = st.chat_input("Ask something from this chat's uploaded documents...")
 
     if question:
         st.session_state.messages.append(
-            {"role": "user", "content": question}
+            {
+                "role": "user",
+                "content": question,
+            }
         )
 
         with chat_box:
@@ -118,7 +159,11 @@ with chat_col:
                             "Content-Type": "application/json",
                             "X-API-Key": API_KEY,
                         },
-                        json={"question": question},
+                        json={
+                            "question": question,
+                            "session_id": st.session_state.session_id,
+                            "history": st.session_state.messages[-8:],
+                        },
                         stream=True,
                         timeout=300,
                     )
@@ -158,7 +203,10 @@ with chat_col:
                                 st.session_state.last_cached = content
 
                         st.session_state.messages.append(
-                            {"role": "assistant", "content": full_answer}
+                            {
+                                "role": "assistant",
+                                "content": full_answer,
+                            }
                         )
 
                         st.rerun()

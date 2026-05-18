@@ -63,60 +63,62 @@ ANSWER:
 
 class RAGService:
     def __init__(self):
-        self.document_store = InMemoryDocumentStore()
-        self.pipeline = self._build_pipeline()
+        self.sessions = {}
         self.cache = InMemoryCache(ttl_seconds=3600)
 
-    def reload_documents(self):
-        self.document_store = InMemoryDocumentStore()
-        self.cache.clear()
-        self.pipeline = self._build_pipeline()
+    def _get_session_dir(self, session_id: str):
+        session_dir = DATA_DIR / "sessions" / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        return session_dir
 
-    def _index_documents(self):
-        documents = load_documents(DATA_DIR)
+    def _build_pipeline_for_session(self, session_id: str):
+        session_dir = self._get_session_dir(session_id)
 
-        if not documents:
-            return 
+        document_store = InMemoryDocumentStore()
 
-        document_embedder = SentenceTransformersDocumentEmbedder(
-            model = EMBEDDING_MODEL
+        documents = load_documents(session_dir)
+
+        if documents:
+            document_embedder = SentenceTransformersDocumentEmbedder(
+                model=EMBEDDING_MODEL
+            )
+
+            document_embedder.warm_up()
+
+            embedded_documents = document_embedder.run(documents)["documents"]
+
+            document_store.write_documents(embedded_documents)
+
+        text_embedder = SentenceTransformersTextEmbedder(
+            model=EMBEDDING_MODEL
         )
-        document_embedder.warm_up()
-
-        embedded_documents = document_embedder.run(documents)["documents"]
-        self.document_store.write_documents(embedded_documents)
-
-    def _build_pipeline(self):
-        self._index_documents()
-
-        text_embedder = SentenceTransformersTextEmbedder(model=EMBEDDING_MODEL)
 
         bm25_retriever = InMemoryBM25Retriever(
-            document_store = self.document_store,
-            top_k=TOP_K_EMBEDDING
+            document_store=document_store,
+            top_k=TOP_K_BM25,
         )
 
         embedding_retriever = InMemoryEmbeddingRetriever(
-            document_store=self.document_store,
+            document_store=document_store,
             top_k=TOP_K_EMBEDDING,
         )
 
         joiner = DocumentJoiner()
 
         ranker = SentenceTransformersSimilarityRanker(
-            model = "cross-encoder/ms-marco-MiniLM-L-6-v2",
-            top_k = TOP_K_RERANK
+            model="cross-encoder/ms-marco-MiniLM-L-6-v2",
+            top_k=TOP_K_RERANK,
         )
 
         prompt_builder = PromptBuilder(template=PROMPT_TEMPLATE)
 
         generator = OllamaGenerator(
-            model = OLLAMA_MODEL,
-            url = OLLAMA_URL,
-            generation_kwargs = {
+            model=OLLAMA_MODEL,
+            url=OLLAMA_URL,
+            generation_kwargs={
                 "temperature": 0.1,
-                "top_p": 0.9
-            }
+                "top_p": 0.9,
+            },
         )
 
         pipeline = Pipeline()
@@ -129,76 +131,186 @@ class RAGService:
         pipeline.add_component("prompt_builder", prompt_builder)
         pipeline.add_component("generator", generator)
 
-        pipeline.connect("text_embedder.embedding", "embedding_retriever.query_embedding")
-        pipeline.connect("bm25_retriever.documents", "joiner.documents")
-        pipeline.connect("embedding_retriever.documents", "joiner.documents")
-        pipeline.connect("joiner.documents", "ranker.documents")
-        pipeline.connect("ranker.documents", "prompt_builder.documents")
-        pipeline.connect("prompt_builder.prompt", "generator.prompt")
+        pipeline.connect(
+            "text_embedder.embedding",
+            "embedding_retriever.query_embedding",
+        )
+
+        pipeline.connect(
+            "bm25_retriever.documents",
+            "joiner.documents",
+        )
+
+        pipeline.connect(
+            "embedding_retriever.documents",
+            "joiner.documents",
+        )
+
+        pipeline.connect(
+            "joiner.documents",
+            "ranker.documents",
+        )
+
+        pipeline.connect(
+            "ranker.documents",
+            "prompt_builder.documents",
+        )
+
+        pipeline.connect(
+            "prompt_builder.prompt",
+            "generator.prompt",
+        )
+
+        self.sessions[session_id] = {
+            "document_store": document_store,
+            "pipeline": pipeline,
+        }
 
         return pipeline
 
-    def ask(self, question: str, history: list[dict] | None=None):
-        cached_result = self.cache.get(question)
+    def reload_session(self, session_id: str):
+        self.cache.clear()
+        return self._build_pipeline_for_session(session_id)
+
+    def get_pipeline(self, session_id: str):
+        if session_id not in self.sessions:
+            return self._build_pipeline_for_session(session_id)
+
+        return self.sessions[session_id]["pipeline"]
+
+    def ask_stream(
+        self,
+        question: str,
+        session_id: str,
+        history: list[dict] | None = None,
+    ) -> Generator[str, None, None]:
 
         history = history or []
 
+        pipeline = self.get_pipeline(session_id)
+
+        cache_key = session_id + question + str(history)
+
+        cached_result = self.cache.get(cache_key)
+
         if cached_result:
-            cached_result["cached"] = True
-            cached_result["response_time_seconds"] = 0.0
-            return cached_result
+            yield f"data: {json.dumps({'type': 'token', 'content': cached_result['answer']})}\n\n"
+            yield f"data: {json.dumps({'type': 'sources', 'content': cached_result['sources']})}\n\n"
+            yield f"data: {json.dumps({'type': 'confidence', 'content': cached_result['confidence']})}\n\n"
+            yield f"data: {json.dumps({'type': 'cache', 'content': True})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
-        start_time = time.time()
+        token_queue = Queue()
 
-        result = self.pipeline.run(
-            {
-                "text_embedder": {
-                    "text": question
-                },
-                "bm25_retriever": {
-                    "query": question
-                },
-                "ranker": {
-                    "query": question
-                },
-                "prompt_builder": {
-                    "question": question,
-                    "history": history
-                }
-            },
-            include_outputs_from={"ranker", "generator"}
-        )
-
-        answer = result["generator"]["replies"][0]
-        retrieved_docs = result["ranker"]["documents"]
-
-        sources = []
-        scores = []
-
-        for doc in retrieved_docs:
-            scores.append(doc.score)
-            sources.append(
-                {
-                    "source": doc.meta.get("source", "unknown"),
-                    "chunk_id": doc.meta.get("chunk_id", -1),
-                    "score": doc.score,
-                    "content": doc.content
-                }
-            )
-
-        response = {
-            "answer": answer,
-            "sources": sources,
-            "confidence": calculate_confidence(scores),
-            "response_time_seconds": round(time.time() - start_time, 2),
-            "cached": False
+        sources_holder = {
+            "sources": [],
+            "confidence": 0.0,
         }
 
-        self.cache.set(question, response)
+        full_answer_parts = []
 
-        return response
+        def streaming_callback(chunk):
+            token = getattr(chunk, "content", "")
 
-    def ask_stream(self, question: str, history: list[dict] | None = None) -> Generator[str, None, None]:
+            if token is None or token == "":
+                return
+
+            full_answer_parts.append(token)
+            token_queue.put(token)
+
+        def run_pipeline():
+            try:
+                generator = OllamaGenerator(
+                    model=OLLAMA_MODEL,
+                    url=OLLAMA_URL,
+                    generation_kwargs={
+                        "temperature": 0.1,
+                        "top_p": 0.9,
+                    },
+                    streaming_callback=streaming_callback,
+                )
+
+                pipeline.components["generator"] = generator
+
+                result = pipeline.run(
+                    {
+                        "text_embedder": {
+                            "text": question
+                        },
+
+                        "bm25_retriever": {
+                            "query": question
+                        },
+
+                        "ranker": {
+                            "query": question
+                        },
+
+                        "prompt_builder": {
+                            "question": question,
+                            "history": history,
+                        },
+                    },
+                    include_outputs_from={"ranker"},
+                )
+
+                docs = result.get("ranker", {}).get("documents", [])
+
+                sources = [
+                    {
+                        "source": doc.meta.get("source", "unknown"),
+                        "chunk_id": doc.meta.get("chunk_id", -1),
+                        "score": doc.score,
+                        "content": doc.content,
+                    }
+                    for doc in docs
+                ]
+
+                confidence = calculate_confidence(
+                    [doc.score for doc in docs]
+                )
+
+                answer = "".join(full_answer_parts)
+
+                sources_holder["sources"] = sources
+                sources_holder["confidence"] = confidence
+
+                self.cache.set(
+                    cache_key,
+                    {
+                        "answer": answer,
+                        "sources": sources,
+                        "confidence": confidence,
+                        "response_time_seconds": 0.0,
+                        "cached": False,
+                    },
+                )
+
+            except Exception as error:
+                token_queue.put(f"[ERROR] {str(error)}")
+
+            finally:
+                token_queue.put(None)
+
+        thread = Thread(target=run_pipeline)
+        thread.start()
+
+        while True:
+            token = token_queue.get()
+
+            if token is None:
+                break
+
+            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'sources', 'content': sources_holder['sources']})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'confidence', 'content': sources_holder['confidence']})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'cache', 'content': False})}\n\n"
+
+        yield "data: [DONE]\n\n"
         cached_result = self.cache.get(question)
 
         history = history or []

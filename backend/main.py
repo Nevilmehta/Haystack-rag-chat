@@ -37,11 +37,22 @@ def chat(request: ChatRequest, api_key: str = Depends(verify_api_key)):
         )
 
 @app.post("/chat/stream")
-def chat_stream(request: ChatRequest, api_key: str = Depends(verify_api_key)):
+def chat_stream(
+    request: ChatRequest,
+    api_key: str = Depends(verify_api_key),
+):
     try:
+        validate_question(request.question)
+
+        history = [message.model_dump() for message in request.history]
+
         return StreamingResponse(
-            rag_service.ask_stream(request.question),
-            media_type="text/event-stream"
+            rag_service.ask_stream(
+                request.question,
+                request.session_id,
+                history,
+            ),
+            media_type="text/event-stream",
         )
 
     except HTTPException:
@@ -50,13 +61,16 @@ def chat_stream(request: ChatRequest, api_key: str = Depends(verify_api_key)):
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to stream answer: {str(error)}"
+            detail=f"Failed to stream answer: {str(error)}",
         )
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), api_key: str = Depends(verify_api_key)):
+async def upload_file(
+    session_id: str,
+    file: UploadFile = File(...),
+    api_key: str = Depends(verify_api_key),
+):
     allowed_extensions = [".pdf", ".txt"]
-
     file_extension = "." + file.filename.split(".")[-1].lower()
 
     if file_extension not in allowed_extensions:
@@ -65,16 +79,19 @@ async def upload_file(file: UploadFile = File(...), api_key: str = Depends(verif
             detail="Only PDF and TXT files are supported.",
         )
 
-    DATA_DIR.mkdir(exist_ok=True)
-    file_path = DATA_DIR / file.filename
+    session_dir = DATA_DIR / "sessions" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    file_path = session_dir / file.filename
     content = await file.read()
 
     with open(file_path, "wb") as output_file:
         output_file.write(content)
 
-    rag_service.reload_documents()
+    rag_service.reload_session(session_id)
 
     return {
         "message": "File uploaded and indexed successfully.",
         "filename": file.filename,
-    }    
+        "session_id": session_id,
+    } 

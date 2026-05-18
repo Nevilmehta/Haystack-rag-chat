@@ -6,6 +6,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=2, max_length=1000)
+    session_id: str 
     history: list[ChatMessage] = []
 
 class SourceChunk(BaseModel):
@@ -20,3 +21,4 @@ class ChatResponse(BaseModel):
     confidence: float
     response_time_seconds: float
     cached: bool = False
+

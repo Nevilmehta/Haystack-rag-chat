@@ -6,6 +6,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
+SESSION_DIR = DATA_DIR / "sessions"
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 

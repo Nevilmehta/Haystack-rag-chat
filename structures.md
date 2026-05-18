@@ -45,3 +45,43 @@ Q1: Who is Nevil Mehta?
 Q2: What frameworks does he use?
 
 The second question should understand “he” from the previous chat.
+
+A more professional flow is:
+one chat session = one temporary workspace
+
+So when you upload 2 files in that chat:
+only those 2 files are active
+Old files should not interfere.
+
+How real systems usually do it:
+They don’t just dump everything into one global data/ folder.
+
+They usually have:
+user_id
+  └── session_id / conversation_id
+        ├── uploaded files
+        ├── extracted chunks
+        ├── embeddings
+        └── chat history
+
+So retrieval happens inside:
+current session only
+Not across every file ever uploaded.
+
+Use:
+
+data/sessions/<session_id>/
+  uploaded PDFs for this chat only ✅
+
+New chat opens
+↓
+session_id created
+↓
+uploaded files saved to data/sessions/<session_id>/
+↓
+RAG indexes only that session
+↓
+questions only use files from that chat
+↓
+New Chat = new clean session
+
